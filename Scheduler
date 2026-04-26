@@ -1,0 +1,98 @@
+private static Trigger buildYearly(Schedule schedule) {
+
+    FrequencyDetails details = schedule.getFrequencyDetails();
+    Repeat repeat = details.getRepeat();
+
+    int every = Math.max(1, repeat.getEvery());
+
+    ZoneId zoneId = ZoneId.of(schedule.getTimezone());
+    ZonedDateTime effectiveZdt = schedule.getEffectiveFrom().atZone(zoneId);
+    LocalTime time = effectiveZdt.toLocalTime();
+
+    String minute = String.valueOf(time.getMinute());
+    String hour = String.valueOf(time.getHour());
+
+    String dayOfMonth = "?";
+    String month = "*";
+    String dayOfWeek = "?";
+
+    YearlyOption option = details.getYearlyOption();
+
+    /*
+     * CASE 1: Specific date
+     */
+    if (option.getDayOfMonth() != null && option.getMonth() != null) {
+
+        int dom = option.getDayOfMonth();
+        if (dom < 1 || dom > 31) {
+            throw new IllegalArgumentException("Invalid dayOfMonth: " + dom);
+        }
+
+        dayOfMonth = String.valueOf(dom);
+        month = String.valueOf(option.getMonth());
+    }
+
+    /*
+     * CASE 2: Nth weekday
+     */
+    else if (option.getWeekOfMonth() != null &&
+             option.getDayOfWeek() != null &&
+             option.getMonthForWeekday() != null) {
+
+        int dow = option.getDayOfWeek();
+        month = String.valueOf(option.getMonthForWeekday());
+
+        dayOfWeek = switch (option.getWeekOfMonth().toUpperCase()) {
+            case "FIRST" -> dow + "#1";
+            case "SECOND" -> dow + "#2";
+            case "THIRD" -> dow + "#3";
+            case "FOURTH" -> dow + "#4";
+            case "LAST" -> dow + "L";
+            default -> throw new IllegalArgumentException("Invalid weekOfMonth");
+        };
+    }
+
+    else {
+        throw new IllegalArgumentException("Invalid yearly configuration");
+    }
+
+    /*
+     * YEAR handling (important for interval correctness)
+     */
+    int startYear = effectiveZdt.getYear();
+    String year = every == 1 ? "*" : startYear + "/" + every;
+
+    String cron = String.format("0 %s %s %s %s %s %s",
+            minute,
+            hour,
+            dayOfMonth,
+            month,
+            dayOfWeek,
+            year
+    );
+
+    CronExpression cronExpr;
+    try {
+        cronExpr = new CronExpression(cron);
+    } catch (ParseException e) {
+        throw new IllegalArgumentException("Invalid cron: " + cron, e);
+    }
+
+    cronExpr.setTimeZone(TimeZone.getTimeZone(zoneId));
+
+    Date startAt = Date.from(effectiveZdt.toInstant());
+    Date endAt = schedule.getExpireAt() != null
+            ? Date.from(schedule.getExpireAt().atZone(zoneId).toInstant())
+            : null;
+
+    return TriggerBuilder.newTrigger()
+            .withIdentity("YEARLY_" + schedule.getName())
+            .startAt(startAt)
+            .endAt(endAt)
+            .withSchedule(
+                    CronScheduleBuilder
+                            .cronSchedule(cronExpr)
+                            .inTimeZone(TimeZone.getTimeZone(zoneId))
+            )
+            .build();
+}
